@@ -262,21 +262,40 @@ AES-192 is the case worth naming. Its key schedule applies the extra `SubWord` s
 `nk > 6`, so the AES-256 branch must *not* run for it — a mistake there yields a
 plausible-looking schedule that is simply wrong, and only a reference vector catches it.
 
-### Result — in progress
+### Result
 
-Blob B against the `compose` corpus under all nine combinations is 1,484,268 candidates per
-cell, 13,358,412 in total, and takes about half an hour. **Reported so far:**
+Blob B against the `compose` corpus under all nine combinations — 1,484,268 candidates per
+cell, **13,358,412 in total**, about 33 minutes:
 
-| Cipher / digest | Candidates | Padding survivors | Rate | Hits |
-|---|---|---|---|---|
-| AES-128 / MD5 | 1,484,268 | 5,707 | 0.385% | **0** |
+| Cipher | MD5 | SHA-1 | SHA-256 |
+|---|---|---|---|
+| **AES-128** | 5,707 (0.385%) | 5,808 (0.391%) | 5,805 (0.391%) |
+| **AES-192** | 5,844 (0.394%) | 5,761 (0.388%) | 5,738 (0.387%) |
+| **AES-256** | 5,774 (0.389%) | 5,887 (0.397%) | **5,777** (0.389%) |
 
-The survivor rate is the per-cell sanity check: each combination should land near
-1/256 = 0.391%, confirming it did real work rather than silently degenerating on a key size
-it could not handle. AES-128/MD5 does.
+**Zero hits in every cell.** Figures are padding survivors and their rate.
 
-This section is updated as the remaining eight cells report. The capability and its parity
-control are what this commit delivers; the completed table follows with the data.
+Two things make this a result rather than nine more null runs:
+
+- **Every cell lands on 1/256 = 0.391%**, spanning 0.385–0.397%. That spread is sampling
+  noise across 1.48M draws. Had a key size been mishandled — the AES-192 schedule being the
+  obvious risk — that cell would have drifted off the line rather than failing loudly.
+- **The AES-256/SHA-256 cell reproduces 5,777 survivors exactly**, matching the standalone
+  `compose` run recorded further down this file. Same computation, different code path, same
+  count to the unit. That is the evidence that parameterising the cipher left the default
+  path untouched, and so that the earlier results still stand as measured.
+
+Blobs A and C were swept across the same nine combinations with the `terms` corpus
+(7,412 candidates per cell): **no hits**, survivor counts 20–39 per cell, again consistent
+with 1/256.
+
+The assumption is now tested rather than inherited. The earlier negatives on all three blobs
+hold without the caveat that they only ever spoke for one cipher out of nine.
+
+```console
+$ python3 crack.py --blob b --source compose --all-params   # ~33 min
+$ python3 crack.py --blob a --source terms --all-params     # seconds
+```
 
 ## The composition sweep
 
