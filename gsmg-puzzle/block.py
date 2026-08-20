@@ -65,13 +65,30 @@ def load_tokens(path: Path | None = None) -> list[str]:
     return text.split()
 
 
+def _is_separator(joined: str, index: int, window: int = 6) -> bool:
+    """Whether the `z` at `index` separates segments, rather than being base64 content.
+
+    `z` is both this block's separator and a legal base64 character, and the block contains
+    one of each: three `z` really do separate digit segments, but the one ending blob A's
+    first line (`...GWVHefvdrd9z`) is ciphertext. Splitting on it drops a character and
+    yields a 127-character blob that will not even base64-decode -- against which no
+    passphrase could ever work.
+
+    The data distinguishes them: a real separator is preceded by digit-alphabet text.
+    """
+    if joined[index] != SEPARATOR:
+        return False
+    before = joined[max(0, index - window) : index]
+    return bool(before) and set(before) <= set(DIGITS + ZERO)
+
+
 def segment(tokens: list[str]) -> list[Segment]:
     """Split the block into binary runs, digit regions, separators and everything else."""
     joined = "".join(tokens)
     cuts = {0, len(joined)}
 
     for index, char in enumerate(joined):
-        if char == SEPARATOR:
+        if char == SEPARATOR and _is_separator(joined, index):
             cuts |= {index, index + 1}
     for match in re.finditer(rf"[ab]{{{MIN_BINARY_RUN},}}", joined):
         cuts |= {match.start(), match.end()}
@@ -102,6 +119,33 @@ def undecoded_regions(segments: list[Segment]) -> tuple[Segment, Segment]:
     )
     a, b = sorted(digit_runs[:2], key=lambda s: s.start)
     return a, b
+
+
+BLOB_MARKER = "U2FsdGVkX1"  # OpenSSL's "Salted__" header, base64 encoded
+SHA_MARKER = "shabef"  # the block's own label for `sha256`, in its digit alphabet
+
+
+def blob_a_base64(segments: list[Segment]) -> str:
+    """Reassemble blob A's ciphertext out of the letter block.
+
+    The ciphertext is split across two mixed segments by the `enter` binary run, and each
+    carries a `shabef` label alongside it: `shabefourfirsthintisyourlastcommand` before the
+    first half, `shabefanstoo` after the second. Strip those and join.
+
+    Exists so the pinned `data/blob_a.b64` can be checked against the source it came from.
+    That check is what caught the `z` at index 958 being treated as a separator, which
+    silently produced a 127-character ciphertext.
+    """
+    mixed = [segment for segment in segments if segment.kind == "mixed"]
+    if len(mixed) != 2:
+        raise ValueError(f"expected 2 mixed segments carrying the blob, got {len(mixed)}")
+
+    head, tail = mixed
+    start = head.text.find(BLOB_MARKER)
+    if start < 0:
+        raise ValueError("no OpenSSL header found in the first mixed segment")
+    end = tail.text.rfind(SHA_MARKER)
+    return head.text[start:] + (tail.text if end < 0 else tail.text[:end])
 
 
 def load_matrix(path: Path | None = None) -> list[list[int]]:

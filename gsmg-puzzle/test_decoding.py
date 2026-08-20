@@ -6,6 +6,7 @@ proving the machinery would notice a positive if one existed.
 
 from __future__ import annotations
 
+import base64
 import random
 
 import block
@@ -26,7 +27,41 @@ def test_segmentation_finds_the_expected_map():
     assert (0, 91, "digits") in spans  # region A
     assert (91, 195, "binary") in spans  # matrixsumlist marker
     assert (195, 765, "digits") in spans  # region B
+    assert (860, 959, "mixed") in spans  # blob A's first half, including its trailing `z`
     assert (959, 999, "binary") in spans  # enter marker
+
+
+def test_only_three_of_the_four_z_characters_are_separators():
+    """The block's separator is also a legal base64 character, and both uses occur.
+
+    `z` separates digit segments at 765, 829 and 859 -- but the one at 958 is the last
+    character of blob A's first line (`...GWVHefvdrd9z`). Treating it as a separator drops
+    it from the ciphertext.
+    """
+    joined = "".join(block.load_tokens())
+    positions = [i for i, char in enumerate(joined) if char == "z"]
+    assert positions == [765, 829, 859, 958]
+    assert [i for i in positions if block._is_separator(joined, i)] == [765, 829, 859]
+
+    separators = [s for s in block.segment(block.load_tokens()) if s.kind == "separator"]
+    assert len(separators) == 3
+
+
+def test_blob_a_round_trips_from_the_letter_block():
+    """The pinned ciphertext must match what the letter block actually says.
+
+    This is the check that caught the `z` bug: with 958 treated as a separator the
+    reconstruction came to 127 characters and would not base64-decode, so no passphrase
+    could ever have worked against it. Keeping the pinned file and the segmentation tied
+    together means they cannot drift apart silently.
+    """
+    derived = block.blob_a_base64(block.segment(block.load_tokens()))
+    pinned = (block.DATA / "blob_a.b64").read_text().replace("\n", "")
+    assert derived == pinned, f"derived {len(derived)} chars, pinned {len(pinned)}"
+
+    raw = base64.b64decode(derived)
+    assert raw[:8] == b"Salted__"
+    assert (len(raw) - 16) % 16 == 0
 
 
 def test_known_decodings_are_recovered():

@@ -24,13 +24,35 @@ rather than hard-coding offsets, so the map can be re-checked against the source
 | `[195:765]` | digits | **region B**, 570 chars | **undecoded** |
 | `[766:829]` | digits | `lastwordsbeforearchichoice` | decoded |
 | `[830:859]` | digits | `thispassword` | decoded |
-| `[860:958]` | mixed | `shabef` + `ourfirsthintisyourlastcommand` + base64 | decoded |
+| `[860:959]` | mixed | `shabef` + `ourfirsthintisyourlastcommand` + base64 | decoded |
 | `[959:999]` | binary | `enter` | decoded |
 | `[999:1075]` | mixed | base64 (second half of blob A) + `shabef` + `anstoo` | decoded |
 
 Two encodings are in play. `a`–`i` are digits 1–9 and `o` is 0; separately, runs drawn from
 only `a`/`b` are binary (`a`=0, `b`=1), which is how `matrixsumlist` and `enter` are carried.
 `shabef` is the digit alphabet applied to letters: `sha` + `b`=2, `e`=5, `f`=6 → `sha256`.
+
+### The separator is ambiguous, and it matters
+
+`z` separates the block's segments — but `z` is also a legal base64 character, and the block
+contains one of each use:
+
+| Index | Context | Separator? |
+|-------|---------|-----------|
+| 765 | `…hiihic z agdafa…` | yes |
+| 829 | `…adedde z cfobfd…` | yes |
+| 859 | `…oofidh z shabef…` | yes |
+| **958** | `…fvdrd9 z abbaab…` | **no — it ends blob A's first line** |
+
+Splitting on `z` unconditionally drops that character from the ciphertext, giving a
+**127-character** blob A that does not base64-decode at all — a blob against which no
+passphrase could ever work, failing silently. The data separates the two cases: a real
+separator is preceded by digit-alphabet text, a base64 `z` is not.
+
+`data/blob_a.b64` was pinned from the README and is correct at 128 characters, so no sweep
+was affected. The risk was latent, in `block.py`'s reconstruction. `block.blob_a_base64()`
+now rebuilds the ciphertext from the letter block and a test asserts it equals the pinned
+file byte for byte, so the two cannot drift apart unnoticed.
 
 Both markers are *inserted into* other data rather than appended to it: `enter` splits the
 base64 blob across `[959:999]`, and `matrixsumlist` sits between regions A and B the same
@@ -195,10 +217,31 @@ and the 5-trial maximum — and they share a lesson: a large search space plus a
 metric manufactures findings, so the metric has to be calibrated against what chance
 produces at the same shape and size.
 
+## The first-hint reading (blob A)
+
+Blob A is the only ciphertext with instructions attached: it sits between `shabef` +
+`ourfirsthintisyourlastcommand` and `shabef` + `anstoo`, with the `enter` run splitting its
+halves. Read together — *the puzzle's first hint, hashed, is the passphrase*.
+
+The first hint is the first puzzle piece. Every sweep so far used the grid's **output**
+(`gsmg.io/theseedisplanted`); none used the grid **itself** as a passphrase string. So
+`firsthint.py` enumerates its readings rather than guessing one: 21 traversals — spirals,
+row and column order, boustrophedon and diagonals, over four rotations and the transpose —
+each rendered as bits, hex, decoded ASCII, and stripped/reversed forms. 70 distinct strings,
+280 candidates per blob.
+
+**No hits** on A, B or C. The generator is sanity-checked by containing
+`gsmg.io/theseedisplanted` and its connected form, so it is producing the right kind of
+string.
+
+This is a small space by design — the grid admits only so many sensible readings — and its
+exhaustion is the point: the reading is now closed rather than open.
+
 ## Reproducing
 
 ```console
 $ cd gsmg-puzzle
+$ python3 firsthint.py --blob a               # the grid as a passphrase, 280 candidates
 $ python3 decode.py --rediscover              # the control that makes negatives meaningful
 $ python3 decode.py --all --null --trials 15  # sweep + shuffled comparison
 $ python3 decode.py --region B --limit 10     # top candidates for one region
