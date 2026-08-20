@@ -47,6 +47,15 @@ KNOWN_PASSWORD = b"250f37726d6862939f723edc4f993fde9d33c6004aab4f2203d9ee489d61c
 _PRINTABLE = set(bytes(string.printable, "ascii"))
 
 
+class EmptySweep(RuntimeError):
+    """Raised when a sweep tried no candidates at all.
+
+    Deliberately an exception rather than a printed warning: a zero-candidate run has the
+    same output shape and the same exit code as a real exhaustive negative, so anything
+    quieter can be scrolled past and written down as a result.
+    """
+
+
 def load(name: str) -> Blob:
     raw = base64.b64decode((DATA / BLOBS[name]).read_text().strip())
     return Blob.parse(raw)
@@ -126,6 +135,13 @@ def search(blob: Blob, source: Iterator[str], min_run: int = 16) -> list[tuple[b
 
     elapsed = time.perf_counter() - start
     rate = tried / elapsed if elapsed else 0
+    if not tried:
+        # An empty source must never look like a completed sweep. The whole product of this
+        # directory is trustworthy negatives, and "searched nothing, found nothing" prints
+        # identically to "searched a million, found nothing" unless it is called out.
+        raise EmptySweep(
+            "the candidate source produced nothing, so this is not a negative result"
+        )
     print(
         f"\ntried={tried:,} in {elapsed:.1f}s ({rate:,.0f}/sec)  "
         f"padding-survivors={survivors}  real-hits={len(hits)}"
@@ -180,6 +196,14 @@ def phrase_control() -> bool:
     return ok
 
 
+def _positive(value: str) -> int:
+    """A word cap below 1 yields no candidates at all, so reject it at the boundary."""
+    number = int(value)
+    if number < 1:
+        raise argparse.ArgumentTypeError(f"must be 1 or greater, got {number}")
+    return number
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--blob", choices=sorted(BLOBS), help="which ciphertext to attack")
@@ -189,7 +213,7 @@ def main() -> int:
                              "compose: answer concatenations")
     parser.add_argument("--phrase-control", action="store_true",
                         help="check the phrase pipeline recovers a known key, then exit")
-    parser.add_argument("--max-words", type=int, help="cap phrase length in words")
+    parser.add_argument("--max-words", type=_positive, help="cap phrase length in words")
     parser.add_argument("--max-terms", type=int, default=2, help="concatenation depth")
     parser.add_argument("--no-thematic", action="store_true", help="drop SPECULATIVE seeds")
     args = parser.parse_args()

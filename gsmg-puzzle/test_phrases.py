@@ -8,11 +8,13 @@ tests exercise the same chain on a small corpus.
 
 from __future__ import annotations
 
+import argparse
 import hashlib
 import random
 
 import crack
 import phrases
+import pytest
 
 # The phase-3.2 passphrase is SHA256 of these three quote answers run together. It is the
 # only passphrase in this puzzle whose construction is published, so it is the one thing
@@ -73,6 +75,29 @@ def test_is_hit_rejects_a_random_padding_survivor():
 
     real = crack.load("known").decrypt(crack.KNOWN_PASSWORD)
     assert crack.is_hit(real, 16)
+
+
+def test_empty_source_cannot_masquerade_as_a_negative_result():
+    """A sweep that tried nothing must not print like a sweep that tried a million.
+
+    Found by verification: `--max-words 0` made `windows()` yield nothing, and the run
+    reported `tried=0 ... real-hits=0` and exited 1 -- the same shape and exit code as a
+    genuine exhaustive negative. This directory's whole output is negative results, so an
+    empty sweep has to be loud.
+    """
+    words = ["alpha", "beta", "gamma"]
+    assert list(phrases.windows(words, max_words=0)) == []
+
+    with pytest.raises(crack.EmptySweep):
+        crack.search(crack.load("c"), iter([]))
+
+
+def test_word_cap_below_one_is_rejected_at_the_boundary():
+    with pytest.raises(argparse.ArgumentTypeError):
+        crack._positive("0")
+    with pytest.raises(argparse.ArgumentTypeError):
+        crack._positive("-3")
+    assert crack._positive("2") == 2
 
 
 def test_longest_printable_span_finds_the_english_paragraph():
