@@ -128,3 +128,30 @@ def score(data: bytes | str) -> float:
     if letters < 0.6:
         return -100.0
     return (english_score(text) + 3.2) * 10 * letters + word_hits(text) * 2.0
+
+
+# Below this many letters a bigram score is not evidence of anything, because a large sweep
+# will turn up short strings that read as English by chance. Chosen by measurement, not
+# taste: over 2000 random letter strings, the share scoring >= 8.0 runs 1.9% at length 4,
+# 0.55% at 6, 0.25% at 8, and 0/2000 at 12 and beyond.
+#
+# The concrete case this rules out: region B reshaped 95x6 sums to `cohert` at 9.76, inside
+# the band real plaintext occupies, yet shuffled copies of B reach 10.44 under that same
+# reading. Twelve also keeps the genuine short plaintexts -- `thispassword` (12) and
+# `matrixsumlist` (13) -- on the confident side.
+MIN_RELIABLE_LETTERS = 12
+
+
+def confident(data: bytes | str, threshold: float = 8.0) -> bool:
+    """Whether a score should be believed as a decoding, rather than merely reported.
+
+    Deliberately separate from `score`. `enter` is a real five-letter plaintext, so length
+    must not rewrite the score itself -- it governs how much weight the score carries. A
+    short candidate can still be surfaced and ranked; it just cannot be called a hit without
+    corroboration from a null comparison.
+    """
+    text = data.decode("ascii", "replace") if isinstance(data, bytes) else data
+    letters = re.sub(r"[^a-z]", "", text.lower())
+    if len(letters) < MIN_RELIABLE_LETTERS:
+        return False
+    return score(data) >= threshold

@@ -132,11 +132,68 @@ index of coincidence means there is no statistical structure left to exploit, so
 enciphered, sweeping cannot recover it without the key. Adding more transformations to the
 registry is unlikely to help; the missing ingredient is external information, not search.
 
-The one lead that remains untested by anything here is the instruction itself.
-`matrixsumlist` is imperative, and `our first hint is your last command` points back to the
-first puzzle piece — but "sum" over the 14×14 grid has many plausible readings (row sums,
-column sums, spiral partial sums), and picking among them needs a constraint the block does
-not supply. That is where a solver should look, not at wider automated sweeps.
+The one lead the sweep could not settle is the instruction itself. `matrixsumlist` is
+imperative, and `our first hint is your last command` points back to the first puzzle piece.
+That lead is now worked through in the next section.
+
+## The matrix-sum readings
+
+`matrixsumlist` reads as an instruction: make a matrix, sum it, get a list. `matrixsum.py`
+makes the plausible readings explicit and enumerable so each can be tested rather than
+argued about. The grid's own sums, for reference:
+
+| | Values | Total |
+|---|---|---|
+| row sums | `6 10 8 7 6 6 5 4 9 9 7 8 7 9` | 101 |
+| column sums | `8 10 8 10 8 7 3 6 7 5 9 6 6 8` | 101 |
+| diagonals | 7 and 8 | — |
+
+Both lists contain values above 9, so they cannot map onto the block's `a`–`i` alphabet
+directly. Any use of them has to be as a key, an index, or an ordering — which is what the
+five families do:
+
+| Family | Reading |
+|---|---|
+| `reshape_axis_sum` | fold a region into each dividing rectangle, sum an axis, read the list as letters |
+| `key_shift` | grid sums as a repeating additive key mod 9 over the region |
+| `index_cumulative` | running totals as 1-indexed positions selecting characters |
+| `transpose_by_rank` | columnar transposition ordered by sum rank |
+| `mask_select` | the grid as a selection mask, in spiral and row-major order |
+
+**Result: 82 readings across both regions, none confident.**
+
+| Region | Best | Reading | Shuffled max (n=60) | p | Verdict |
+|--------|------|---------|--------------------|---|---------|
+| A | 4.34 | `reshape 13x7 rowsum` | 6.49 | 0.344 | within noise |
+| B | 9.76 | `reshape 95x6 colsum` | 10.66 | 0.033 | too short to judge |
+
+### A false positive worth keeping
+
+Region B's best result is the string **`cohert`**, scoring 9.76 — inside the 9.6–17.2 band
+that real plaintext occupies, and sitting at the top of every ranking. It is not a decoding.
+Shuffled copies of region B reach the same score under the same reading, and its nominal
+p = 0.033 is an artifact of rank-based p-values bottoming out at 1/(trials+1).
+
+The root cause is length. Six letters is not enough for a bigram score to mean anything when
+a sweep is drawing from dozens of readings. Measured over 2000 random letter strings, the
+share scoring ≥ 8.0 runs:
+
+| Length | 4 | 6 | 8 | 10 | 12 | 20 |
+|--------|---|---|---|----|----|----|
+| Share ≥ 8.0 | 1.9% | 0.55% | 0.25% | 0.05% | 0% | 0% |
+
+So `score.confident()` now requires **12 letters** as well as a passing score — chosen from
+that measurement, and high enough to reject `cohert` while keeping the genuine short
+plaintexts `thispassword` (12) and `matrixsumlist` (13). `enter` (5 letters) stays
+non-confident, which is the honest outcome: it was validated by its position inside the
+base64 blob, not by its score.
+
+`cohert` is pinned in `test_matrixsum.py` so the guard cannot regress.
+
+This is the third error of the same shape in this work — after the 77%-printable artifact
+and the 5-trial maximum — and they share a lesson: a large search space plus a permissive
+metric manufactures findings, so the metric has to be calibrated against what chance
+produces at the same shape and size.
 
 ## Reproducing
 
@@ -145,5 +202,6 @@ $ cd gsmg-puzzle
 $ python3 decode.py --rediscover              # the control that makes negatives meaningful
 $ python3 decode.py --all --null --trials 15  # sweep + shuffled comparison
 $ python3 decode.py --region B --limit 10     # top candidates for one region
-$ pytest test_decoding.py
+$ python3 matrixsum.py --null --trials 60     # the matrix-sum readings
+$ pytest test_decoding.py test_matrixsum.py
 ```
