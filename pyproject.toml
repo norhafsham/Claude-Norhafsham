@@ -8,7 +8,7 @@ requires-python = ">=3.11"
 dev = ["pytest>=8.0", "ruff>=0.6"]
 
 [tool.pytest.ini_options]
-testpaths = ["security/poc/tests"]
+testpaths = ["security/poc/tests", "gsmg-puzzle"]
 # Network tests hit raw.githubusercontent.com to check the pinned upstream spec.
 # Deselected by default; run them with `pytest -m network`.
 addopts = "-q -m 'not network'"

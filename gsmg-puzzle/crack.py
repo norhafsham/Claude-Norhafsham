@@ -1,0 +1,167 @@
+"""Try candidate passphrases against the unsolved GSMG.IO AES blobs.
+
+Two-stage check per candidate. Stage one decrypts only the final CBC block and tests its
+PKCS#7 padding -- one block-decrypt regardless of blob size, ~7.6k candidates/sec here,
+against ~200/sec if we shelled out to `openssl` for each. Stage one lets roughly 1 in 256
+wrong passphrases through, so stage two fully decrypts the survivors and scores them for
+printable text before anything is reported.
+
+Every passphrase is tried in four encodings, because the solved stages used the digest
+rather than the phrase: the raw string, its lowercase SHA-256 hex, that hex uppercased,
+and the digest of the digest.
+
+    python3 crack.py --self-test          # controls; run this before trusting a result
+    python3 crack.py --blob a             # the 5-block blob embedded in SalPhaseIon
+    python3 crack.py --blob b             # the 83-block Cosmic Duality blob
+"""
+
+from __future__ import annotations
+
+import argparse
+import base64
+import hashlib
+import string
+import sys
+import time
+from collections.abc import Iterator
+from pathlib import Path
+
+import candidates
+from aes import Blob
+
+DATA = Path(__file__).parent / "data"
+BLOBS = {
+    "a": "blob_a.b64",  # 5 blocks, embedded in the SalPhaseIon letter block
+    "b": "blob_b.b64",  # 83 blocks, the Cosmic Duality textarea
+    "c": "blob_c.b64",  # 5 blocks, trailing the decrypted phase-3.2 plaintext
+    "known": "known_phase32.b64",  # solved; positive control only
+}
+
+# The passphrase for the phase-3.2 blob, published in the puzzle README. Used as a
+# positive control: a rig that cannot rediscover this cannot be trusted to report "no hit".
+KNOWN_PASSWORD = b"250f37726d6862939f723edc4f993fde9d33c6004aab4f2203d9ee489d61ce4c"
+
+_PRINTABLE = set(bytes(string.printable, "ascii"))
+
+
+def load(name: str) -> Blob:
+    raw = base64.b64decode((DATA / BLOBS[name]).read_text().strip())
+    return Blob.parse(raw)
+
+
+def encodings(candidate: str) -> Iterator[bytes]:
+    """The four passphrase forms the puzzle's conventions make plausible."""
+    yield candidate.encode()
+    digest = hashlib.sha256(candidate.encode()).hexdigest()
+    yield digest.encode()
+    yield digest.upper().encode()
+    yield hashlib.sha256(digest.encode()).hexdigest().encode()
+
+
+def printable_ratio(data: bytes) -> float:
+    return sum(b in _PRINTABLE for b in data) / len(data) if data else 0.0
+
+
+def longest_printable_run(data: bytes) -> int:
+    """Longest unbroken run of printable ASCII.
+
+    This, not the printable *ratio*, is the discriminator. The known phase-3.2 plaintext
+    is only 60% printable because it embeds box-drawing characters and a base64 blob, so
+    a ratio threshold rejects a correct decryption -- the end-to-end control caught that.
+    Run length separates cleanly instead: English, base64 and hex all give one long run,
+    while random bytes (p(printable) ~ 0.39) give an expected maximum run near 5.
+    """
+    best = run = 0
+    for byte in data:
+        run = run + 1 if byte in _PRINTABLE else 0
+        best = max(best, run)
+    return best
+
+
+def search(blob: Blob, source: Iterator[str], min_run: int = 16) -> list[tuple[bytes, bytes]]:
+    """Run the corpus against a blob. Returns [(passphrase, plaintext)] for real hits."""
+    hits: list[tuple[bytes, bytes]] = []
+    ranked: list[tuple[int, bytes, bytes]] = []
+    tried = survivors = 0
+    start = time.perf_counter()
+
+    for candidate in source:
+        for password in encodings(candidate):
+            tried += 1
+            if not blob.padding_ok(password):
+                continue
+            # ~1/256 of wrong passphrases reach here by chance; stage two sorts them out.
+            survivors += 1
+            plaintext = blob.decrypt(password)
+            if plaintext is None:
+                continue
+            run = longest_printable_run(plaintext)
+            ranked.append((run, password, plaintext))
+            if run >= min_run:
+                hits.append((password, plaintext))
+                print(f"\n*** HIT  passphrase={password.decode()!r}  run={run}")
+                print(plaintext.decode("utf-8", "replace"))
+
+    elapsed = time.perf_counter() - start
+    rate = tried / elapsed if elapsed else 0
+    print(
+        f"\ntried={tried:,} in {elapsed:.1f}s ({rate:,.0f}/sec)  "
+        f"padding-survivors={survivors}  real-hits={len(hits)}"
+    )
+    # Show the best near-misses so a marginal result is never silently dropped.
+    for run, password, plaintext in sorted(ranked, reverse=True, key=lambda r: r[0])[:5]:
+        if run < min_run:
+            print(
+                f"  best-effort run={run:3d} printable={printable_ratio(plaintext):.0%} "
+                f"pass={password[:40].decode()}"
+            )
+    return hits
+
+
+def self_test() -> bool:
+    """Controls that must pass before any negative result is meaningful."""
+    ok = True
+
+    def report(label: str, passed: bool) -> bool:
+        print(f"{label:<52} {'PASS' if passed else 'FAIL'}")
+        return passed
+
+    known = load("known")
+    plaintext = known.decrypt(KNOWN_PASSWORD)
+    ok &= report(
+        "positive control (known passphrase decrypts)",
+        plaintext is not None and plaintext.startswith(b"I've been waiting for you."),
+    )
+    ok &= report("negative control (random key rejected)", known.decrypt(b"deadbeef" * 8) is None)
+
+    found = search(known, iter([KNOWN_PASSWORD.decode()]))
+    ok &= report("end-to-end (search finds the known passphrase)", len(found) == 1)
+
+    for name in ("a", "b", "c"):
+        blob = load(name)
+        print(f"blob {name}: {blob.blocks} blocks, salt={blob.salt.hex()}")
+
+    return ok
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--blob", choices=sorted(BLOBS), help="which ciphertext to attack")
+    parser.add_argument("--self-test", action="store_true", help="run controls and exit")
+    parser.add_argument("--max-terms", type=int, default=2, help="concatenation depth")
+    parser.add_argument("--no-thematic", action="store_true", help="drop SPECULATIVE seeds")
+    args = parser.parse_args()
+
+    if args.self_test:
+        return 0 if self_test() else 1
+    if not args.blob:
+        parser.error("pass --blob or --self-test")
+
+    blob = load(args.blob)
+    print(f"blob {args.blob}: {blob.blocks} blocks, salt={blob.salt.hex()}")
+    source = candidates.generate(max_terms=args.max_terms, thematic=not args.no_thematic)
+    return 0 if search(blob, source) else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
