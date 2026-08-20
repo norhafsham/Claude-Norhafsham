@@ -37,26 +37,49 @@ KNOWN_PHASE32_PASSWORD = b"250f37726d6862939f723edc4f993fde9d33c6004aab4f2203d9e
 
 
 def _clean(text: str) -> list[str]:
-    """Words of a source, dropping comment lines and punctuation."""
+    """Words of a source, dropping comment lines and punctuation.
+
+    Punctuation becomes a separator rather than being stripped in place, so hyphenated and
+    ampersand-joined constructions keep *both* halves: `fubcd-king & oracle-queen` yields
+    five words, not three.
+    """
     lines = [line for line in text.splitlines() if not line.lstrip().startswith("#")]
     return re.sub(r"[^A-Za-z0-9 ]+", " ", " ".join(lines)).split()
 
 
-def phase32_text() -> str:
-    """The decrypted phase-3.2 plaintext, English portion only.
+def _is_payload(line: str) -> bool:
+    """Whether a line of the phase-3.2 plaintext is an encoded payload rather than prose.
 
-    The blob also carries an EBCDIC block, a digit string and a base64 blob; those are not
-    prose and would only add noise windows.
+    The plaintext carries a base64 blob, a long digit string and an EBCDIC block alongside
+    its English. Those have to go, but selecting prose by character class instead silently
+    drops short words trapped between punctuation -- the first version of this used a
+    `[A-Za-z ',.]{12,}` match and lost `king` and `oracle` out of
+    `A fubcd-king & oracle-queen`, so no phrase window ever contained them.
     """
-    raw = (DATA / "known_phase32.b64").read_text()
+    stripped = line.strip()
+    if not stripped:
+        return True
+    if " " not in stripped and len(stripped) > 24:  # base64 or digit run
+        return True
+    letters = sum(char.isalpha() or char.isspace() for char in stripped)
+    return letters / len(stripped) < 0.7  # EBCDIC block and similar
+
+
+def phase32_text() -> str:
+    """The decrypted phase-3.2 plaintext, prose only.
+
+    Decrypted from the pinned ciphertext rather than transcribed, so it cannot drift from
+    what the puzzle actually emitted.
+    """
     import base64
 
+    raw = (DATA / "known_phase32.b64").read_text()
     blob = aes.Blob.parse(base64.b64decode(raw))
     plaintext = blob.decrypt(KNOWN_PHASE32_PASSWORD)
     if plaintext is None:
         raise RuntimeError("phase-3.2 control blob failed to decrypt")
     text = plaintext.decode("ascii", "ignore")
-    return " ".join(re.findall(r"[A-Za-z][A-Za-z ',.]{12,}", text))
+    return " ".join(line for line in text.splitlines() if not _is_payload(line))
 
 
 def sources() -> dict[str, list[str]]:

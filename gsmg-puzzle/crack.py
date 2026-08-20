@@ -27,6 +27,7 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import candidates
+import compose
 import phrases
 import score
 from aes import Blob
@@ -183,8 +184,9 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--blob", choices=sorted(BLOBS), help="which ciphertext to attack")
     parser.add_argument("--self-test", action="store_true", help="run controls and exit")
-    parser.add_argument("--source", choices=["terms", "phrases"], default="terms",
-                        help="terms: recombined short strings; phrases: word windows of texts")
+    parser.add_argument("--source", choices=["terms", "phrases", "compose"], default="terms",
+                        help="terms: short strings; phrases: word windows; "
+                             "compose: answer concatenations")
     parser.add_argument("--phrase-control", action="store_true",
                         help="check the phrase pipeline recovers a known key, then exit")
     parser.add_argument("--max-words", type=int, help="cap phrase length in words")
@@ -204,6 +206,9 @@ def main() -> int:
     if args.source == "phrases":
         print(phrases.describe())
         source = phrases.generate(max_words=args.max_words)
+    elif args.source == "compose":
+        print(compose.describe())
+        source = compose.generate()
     else:
         source = candidates.generate(max_terms=args.max_terms, thematic=not args.no_thematic)
     return 0 if search(blob, source) else 1

@@ -170,19 +170,19 @@ window** of every text available, longest-first:
 |--------|-------|---------|
 | `architect.txt` (Beaufort plaintext) | 336 | 56,616 |
 | `film_lines.txt` (**approximate**, recalled) | 210 | 22,155 |
-| `phase32` (decrypted at runtime, not transcribed) | 100 | 5,050 |
+| `phase32` (decrypted at runtime, not transcribed) | 104 | 5,460 |
 | `decoded_lines.txt` | 91 | 4,186 |
-| **total** | | **88,007** |
+| **total** | | **88,417** |
 
-Times four normalisations and four encodings: **1,152,396 candidates per blob.**
+Times four normalisations and four encodings: **1,158,696 candidates per blob.**
 
 ### Result
 
 | Blob | Candidates | Padding survivors | Longest span | Hits |
 |------|-----------|-------------------|--------------|------|
-| B (Cosmic Duality) | 1,152,396 | 4,569 | 15 | **0** |
-| A | 1,152,396 | 4,596 | 15 | **0** |
-| C | 1,152,396 | 4,552 | 13 | **0** |
+| B (Cosmic Duality) | 1,158,696 | 4,591 | 15 | **0** |
+| A | 1,158,696 | 4,613 | 15 | **0** |
+| C | 1,158,696 | 4,587 | 13 | **0** |
 
 Survivor counts sit at 0.40% against the theoretical 1/256 = 0.39%, and the longest printable
 spans match the wrong-key distribution exactly (measured median 8, max 15 on a blob this
@@ -192,7 +192,7 @@ size). Nothing stands out from noise anywhere.
 
 `crack.py --phrase-control` runs the entire pipeline — window → lowercase-and-strip →
 SHA-256 → decrypt — against the one blob whose passphrase is published, and requires it to
-come back with exactly that key. It recovers it from 1,152,396 candidates, alone.
+come back with exactly that key. It recovers it from 1,158,696 candidates, alone.
 
 Getting that control to pass exposed a real defect. On its first run it reported **three**
 hits on a blob with one known key. Cause: the hit test was span length alone, `>= 16`
@@ -217,6 +217,93 @@ weaker than one over the puzzle's own texts.
 ```console
 $ python3 crack.py --phrase-control        # ~3.5 min; must recover the known key
 $ python3 crack.py --blob b --source phrases
+```
+
+> **Corrected.** The numbers above are from a re-run. The first version of this sweep used a
+> corpus with a extraction defect that dropped `king` and `oracle` — see
+> *A defect that narrowed the previous sweep*, below. It reported 1,152,396 candidates over
+> 88,007 windows; the corrected corpus gives 1,158,696 over 88,417. The result was
+> unchanged (no hits), but the earlier figure was measured on a narrower corpus than stated.
+
+## The composition sweep
+
+Aimed at **blob C** — the 5-block ciphertext at the tail of the phase-3.2 plaintext that the
+upstream README never discusses, and chronologically the next step after the last solved
+stage.
+
+**Blob C has no hint of its own.** The prose immediately before it — *"Raising the stakes
+without extra chances of winning. A fubcd-king & oracle-queen, thingky mvps, on a sad board
+but as wide as the first one seen."* — is the alphabet hint for the VIC cipher *above* it,
+which the README already consumed (`FUBCD ORACLE THINGKY MVPS`, and "as wide as the first one
+seen" → 14 → VIC digits 1 and 4). It points backwards. So blob C's key has to come from
+earlier stages' **outputs**, not from a fresh clue.
+
+That rules the previous two corpora out by shape. `phrases.py` only reaches *contiguous* word
+windows; `candidates.py` stopped at ordered triples of short terms. But both published keys
+in this puzzle are built from pieces that are **not adjacent in any text**:
+
+    phase 3    SHA256("causality" + "Safenet" + "Luna" + "HSM" + "11110" + <scriptSig> + <FEN>)
+    phase 3.2  SHA256("jacquefresco" + "giveitjustonesecond" + "heisenbergsuncertaintyprinciple")
+
+`compose.py` builds exactly that: ordered permutations of 20 **answer atoms**, each tagged
+with its provenance (the seven phase-3 parts, the three phase-3.2 answers, the four
+SalPhaseIon fragments, the Beaufort key, `hashthetext`, `theseedisplanted`, the phase-2
+password, and the Architect speech's imperatives), at depths 2 to 4, in both separator and
+casing conventions — plus sentence initialisms, which no sweep had covered.
+
+| Depth | Orderings |
+|-------|-----------|
+| 2 | 380 |
+| 3 | 6,840 |
+| 4 | 116,280 |
+| **total** | **123,500** × 2 separators × 2 casings → **1,484,268 candidates per blob** |
+
+### Result
+
+| Blob | Candidates | Padding survivors | Rate | Longest span | Hits |
+|------|-----------|-------------------|------|--------------|------|
+| C | 1,484,268 | 5,767 | 0.389% | 13 | **0** |
+| A | 1,484,268 | 5,743 | 0.387% | — | **0** |
+| B | 1,484,268 | 5,777 | 0.389% | — | **0** |
+
+Survivor rates sit on the theoretical 1/256 = 0.391%, and blob C's best printable span of 13
+is inside the wrong-key noise ceiling measured earlier.
+
+The control is the same shape as the target: `compose.py --control` runs depth-3 composition
+against the one blob whose passphrase is published and requires it to return
+`jacquefrescogiveitjustonesecondheisenbergsuncertaintyprinciple` — **and nothing else**. It
+does.
+
+### A defect that narrowed the previous sweep
+
+Looking into blob C turned up a bug in the phrase corpus. `phrases.phase32_text()` selected
+prose with a `[A-Za-z ',.]{12,}` character-class match, which silently dropped short words
+trapped between punctuation. From `A fubcd-king & oracle-queen`, the words **`king`** and
+**`oracle`** fell below the 12-character floor and were discarded entirely — so no phrase
+window ever contained them, in a sentence attached to blob C. A base64 fragment
+(`sWDzNLxDmlPMsDSiuW`) also leaked in as if it were prose.
+
+Selecting prose by *excluding payloads* rather than by character class fixes both: the
+phase-3.2 corpus goes from 100 to 104 words, and the phrase sweep was re-run on all three
+blobs, which is where the corrected numbers above come from.
+
+This is the fourth error of the same family in this work, after the 77%-printable artifact,
+the 5-trial maximum, and the `cohert` false positive. Three of the four inflated a result;
+this one quietly shrank the search. Both directions are worth the same suspicion.
+
+### What this rules out
+
+Ruled out: any key that is an ordered concatenation of up to four of these 20 answers, under
+both separator and both casing conventions and four encodings.
+
+Not ruled out: composition is combinatorial, so depth 4 over 20 atoms is a bound, not a
+proof. A key built from five atoms, or from any atom outside the set — including one from a
+stage nobody has solved yet — stays out of reach.
+
+```console
+$ python3 compose.py --describe
+$ python3 compose.py --control             # must recover the published key, uniquely
+$ python3 crack.py --blob c --source compose
 ```
 
 ## Reproducing
