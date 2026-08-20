@@ -27,6 +27,8 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import candidates
+import phrases
+import score
 from aes import Blob
 
 DATA = Path(__file__).parent / "data"
@@ -62,20 +64,39 @@ def printable_ratio(data: bytes) -> float:
     return sum(b in _PRINTABLE for b in data) / len(data) if data else 0.0
 
 
-def longest_printable_run(data: bytes) -> int:
-    """Longest unbroken run of printable ASCII.
+def longest_printable_span(data: bytes) -> bytes:
+    """The longest unbroken stretch of printable ASCII.
 
-    This, not the printable *ratio*, is the discriminator. The known phase-3.2 plaintext
-    is only 60% printable because it embeds box-drawing characters and a base64 blob, so
-    a ratio threshold rejects a correct decryption -- the end-to-end control caught that.
-    Run length separates cleanly instead: English, base64 and hex all give one long run,
-    while random bytes (p(printable) ~ 0.39) give an expected maximum run near 5.
+    This, not the printable *ratio*, is the discriminator. The known phase-3.2 plaintext is
+    only 60% printable because it embeds box-drawing characters and a base64 blob, so a
+    ratio threshold rejects a correct decryption. Spans separate cleanly instead: the real
+    plaintext's is 447 characters, while wrong keys on a blob that size top out near 15.
     """
-    best = run = 0
+    best = current = b""
     for byte in data:
-        run = run + 1 if byte in _PRINTABLE else 0
-        best = max(best, run)
+        current = current + bytes([byte]) if byte in _PRINTABLE else b""
+        if len(current) > len(best):
+            best = current
     return best
+
+
+def longest_printable_run(data: bytes) -> int:
+    return len(longest_printable_span(data))
+
+
+def is_hit(plaintext: bytes, min_run: int) -> bool:
+    """Whether a padding survivor is really a decryption.
+
+    Length alone is not enough at scale. A wrong key's longest span tops out near 15 on a
+    2.4 KB blob, but a sweep of a million candidates leaves thousands of padding survivors,
+    and roughly one in 1300 of those clears 16 by chance -- which is exactly how the first
+    run of the phrase control reported three hits on a blob with one known key. So the span
+    also has to read as language, judged by the calibrated scorer.
+    """
+    span = longest_printable_span(plaintext)
+    if len(span) < min_run:
+        return False
+    return score.confident(span.decode("ascii", "replace"))
 
 
 def search(blob: Blob, source: Iterator[str], min_run: int = 16) -> list[tuple[bytes, bytes]]:
@@ -97,7 +118,7 @@ def search(blob: Blob, source: Iterator[str], min_run: int = 16) -> list[tuple[b
                 continue
             run = longest_printable_run(plaintext)
             ranked.append((run, password, plaintext))
-            if run >= min_run:
+            if is_hit(plaintext, min_run):
                 hits.append((password, plaintext))
                 print(f"\n*** HIT  passphrase={password.decode()!r}  run={run}")
                 print(plaintext.decode("utf-8", "replace"))
@@ -144,22 +165,47 @@ def self_test() -> bool:
     return ok
 
 
+def phrase_control() -> bool:
+    """Control for the phrase sweep: recover a known key through the whole pipeline.
+
+    The phase-3.2 passphrase is the SHA-256 of three quote answers run together, which is
+    exactly the shape the phrase sweep assumes. Requiring the sweep to rediscover it --
+    window -> lowercase-and-strip -> SHA-256 -> decrypt -- is what makes a negative on the
+    Cosmic Duality blob mean something.
+    """
+    found = search(load("known"), phrases.generate())
+    ok = len(found) == 1
+    print(f"phrase pipeline recovers the known phase-3.2 key: {'PASS' if ok else 'FAIL'}")
+    return ok
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--blob", choices=sorted(BLOBS), help="which ciphertext to attack")
     parser.add_argument("--self-test", action="store_true", help="run controls and exit")
+    parser.add_argument("--source", choices=["terms", "phrases"], default="terms",
+                        help="terms: recombined short strings; phrases: word windows of texts")
+    parser.add_argument("--phrase-control", action="store_true",
+                        help="check the phrase pipeline recovers a known key, then exit")
+    parser.add_argument("--max-words", type=int, help="cap phrase length in words")
     parser.add_argument("--max-terms", type=int, default=2, help="concatenation depth")
     parser.add_argument("--no-thematic", action="store_true", help="drop SPECULATIVE seeds")
     args = parser.parse_args()
 
     if args.self_test:
         return 0 if self_test() else 1
+    if args.phrase_control:
+        return 0 if phrase_control() else 1
     if not args.blob:
-        parser.error("pass --blob or --self-test")
+        parser.error("pass --blob, --self-test or --phrase-control")
 
     blob = load(args.blob)
     print(f"blob {args.blob}: {blob.blocks} blocks, salt={blob.salt.hex()}")
-    source = candidates.generate(max_terms=args.max_terms, thematic=not args.no_thematic)
+    if args.source == "phrases":
+        print(phrases.describe())
+        source = phrases.generate(max_words=args.max_words)
+    else:
+        source = candidates.generate(max_terms=args.max_terms, thematic=not args.no_thematic)
     return 0 if search(blob, source) else 1
 
 

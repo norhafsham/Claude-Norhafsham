@@ -145,6 +145,80 @@ the letter block — was attempted and produced no new plaintext. It did establi
 two undecoded regions score no better than shuffled copies of themselves, and that region B
 has a flat index of coincidence, which bounds what any further sweeping can achieve.
 
+## The phrase-window sweep
+
+The corpus above recombines known *short strings*. That is the wrong shape. The SalPhaseIon
+block's decoded fragments read as an ordered recipe:
+
+| Fragment | Reading |
+|---|---|
+| `lastwordsbeforearchichoice` | the last words before the Architect's choice |
+| `thispassword` | …is this password |
+| `ourfirsthintisyourlastcommand` | the first hint is the last instruction |
+| `shabef` + `anstoo` | `sha256`, *answer too* — hash the answer as well |
+
+So the intended passphrase is a **phrase** lifted from a narrative text, stripped per the
+puzzle's own `/(aaa, connected enf)` convention and hashed. Every solved stage worked that
+way: the phase-3.2 key is `SHA256("jacquefrescogiveitjustonesecondheisenbergsuncertainty`
+`principle")` — three quote answers run together.
+
+`CHOICE` appears nowhere in the puzzle's own Architect text, so the phrase anchors to the
+film scene. Rather than guess where to cut, `phrases.py` enumerates **every contiguous word
+window** of every text available, longest-first:
+
+| Source | Words | Windows |
+|--------|-------|---------|
+| `architect.txt` (Beaufort plaintext) | 336 | 56,616 |
+| `film_lines.txt` (**approximate**, recalled) | 210 | 22,155 |
+| `phase32` (decrypted at runtime, not transcribed) | 100 | 5,050 |
+| `decoded_lines.txt` | 91 | 4,186 |
+| **total** | | **88,007** |
+
+Times four normalisations and four encodings: **1,152,396 candidates per blob.**
+
+### Result
+
+| Blob | Candidates | Padding survivors | Longest span | Hits |
+|------|-----------|-------------------|--------------|------|
+| B (Cosmic Duality) | 1,152,396 | 4,569 | 15 | **0** |
+| A | 1,152,396 | 4,596 | 15 | **0** |
+| C | 1,152,396 | 4,552 | 13 | **0** |
+
+Survivor counts sit at 0.40% against the theoretical 1/256 = 0.39%, and the longest printable
+spans match the wrong-key distribution exactly (measured median 8, max 15 on a blob this
+size). Nothing stands out from noise anywhere.
+
+### The control that makes this mean something
+
+`crack.py --phrase-control` runs the entire pipeline — window → lowercase-and-strip →
+SHA-256 → decrypt — against the one blob whose passphrase is published, and requires it to
+come back with exactly that key. It recovers it from 1,152,396 candidates, alone.
+
+Getting that control to pass exposed a real defect. On its first run it reported **three**
+hits on a blob with one known key. Cause: the hit test was span length alone, `>= 16`
+printable characters. A wrong key's longest span tops out near 15 on a 2.4 KB blob — but
+4,527 padding survivors give roughly one in 1,300 a chance of clearing 16 anyway, so about
+three false hits were expected, and three arrived. The span now also has to read as language
+under the calibrated scorer in `score.py`. That threshold had been fine for every earlier
+sweep and only broke at a million candidates.
+
+### What this rules out
+
+Ruled out: any passphrase that is a contiguous word window of these texts, under four
+normalisations and four encodings.
+
+Not ruled out, and worth being plain about: a phrase that is **paraphrased**, drawn from a
+source not in `data/`, or assembled from **non-adjacent** pieces the way the phase-3.2 key
+was — that key is three separate answers concatenated, which is exactly the shape this sweep
+cannot reach for texts it does not already hold verbatim. And `film_lines.txt` is recalled
+rather than sourced, so a wording error there is a silent miss; a negative over that file is
+weaker than one over the puzzle's own texts.
+
+```console
+$ python3 crack.py --phrase-control        # ~3.5 min; must recover the known key
+$ python3 crack.py --blob b --source phrases
+```
+
 ## Reproducing
 
 ```console

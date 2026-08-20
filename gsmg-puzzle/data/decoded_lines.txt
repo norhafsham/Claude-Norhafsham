@@ -1,0 +1,21 @@
+# Plaintexts already recovered from the puzzle, other than the two long narrative texts
+# (data/architect.txt, and the phase-3.2 text which phrases.py decrypts at runtime from
+# data/known_phase32.b64 rather than transcribing).
+#
+# Sources: the VIC cipher output of phase 3.2.2, the SalPhaseIon block's own decoded
+# fragments, and the answer sentence whose SHA-256 is the published phase-3.2 key -- that
+# last line is what the end-to-end control relies on, so do not remove it.
+# Lines beginning with # are ignored.
+
+IN CASE YOU MANAGE TO CRACK THIS THE PRIVATE KEYS BELONG TO HALF AND BETTER HALF AND THEY ALSO NEED FUNDS TO LIVE
+jacque fresco give it just one second heisenbergs uncertainty principle
+matrix sum list
+last words before archi choice
+this password
+our first hint is your last command
+sha256 ans too
+the flower blossoms through what seems to be a concrete surface
+choice is an illusion created between those with power and those without
+a very special dessert i wrote it myself
+the seed is planted
+hash the text

@@ -1,0 +1,26 @@
+# APPROXIMATE. The Architect's dialogue from The Matrix Reloaded, around the choice of
+# doors, recalled rather than transcribed from a source. Wording errors here are silent
+# misses -- a negative result over this file is weaker than one over the puzzle's own texts.
+#
+# Included because `lastwordsbeforearchichoice` points at the Architect's choice, and the
+# word CHOICE appears nowhere in the puzzle's own Architect text (data/architect.txt).
+# Lines beginning with # are ignored.
+
+The door to your right leads to the source and the salvation of Zion
+The door to your left leads back to the Matrix to her and to the end of your species
+As you adequately put the problem is choice
+But we already know what you are going to do dont we
+Already I can see the chain reaction the chemical precursors that signal the onset of emotion
+designed specifically to overwhelm logic and reason
+An emotion that is already blinding you from the simple and obvious truth
+she is going to die and there is nothing you can do to stop it
+Hope it is the quintessential human delusion simultaneously the source of your greatest
+strength and your greatest weakness
+Which brings us at last to the moment of truth wherein the fundamental flaw is ultimately
+expressed and the anomaly revealed as both beginning and end
+Denial is the most predictable of all human responses
+There are levels of survival we are prepared to accept
+The relevant issue is whether or not you are ready to accept the responsibility
+for the death of every human being in this world
+Your life is the sum of a remainder of an unbalanced equation inherent to the programming
+of the matrix
