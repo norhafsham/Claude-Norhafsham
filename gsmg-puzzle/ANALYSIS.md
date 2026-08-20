@@ -140,6 +140,11 @@ not enlarging this corpus.
 Unbounded brute force is deliberately not attempted. The keyspace is a chosen English
 phrase, so untargeted search is wasted compute and is not a path to the bounty.
 
+**Followed up in [DECODING.md](DECODING.md).** The next step named above — decoding more of
+the letter block — was attempted and produced no new plaintext. It did establish that the
+two undecoded regions score no better than shuffled copies of themselves, and that region B
+has a flat index of coincidence, which bounds what any further sweeping can achieve.
+
 ## Reproducing
 
 ```console
