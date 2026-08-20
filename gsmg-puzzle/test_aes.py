@@ -30,12 +30,59 @@ def openssl_accepts(b64: str, password: str) -> bool:
     return result.returncode == 0
 
 
-def test_fips197_aes256_inverse_cipher():
-    """FIPS-197 appendix C.3."""
-    plaintext = aes.decrypt_block(
-        bytes.fromhex("8ea2b7ca516745bfeafc49904b496089"), aes._expand_key(bytes(range(32)))
-    )
+@pytest.mark.parametrize(
+    ("key_size", "ciphertext", "rounds"),
+    [
+        (16, "69c4e0d86a7b0430d8cdb78070b4c55a", 10),  # FIPS-197 C.1
+        (24, "dda97ca4864cdfe06eaf70a0ec0d7191", 12),  # FIPS-197 C.2
+        (32, "8ea2b7ca516745bfeafc49904b496089", 14),  # FIPS-197 C.3
+    ],
+)
+def test_fips197_inverse_cipher(key_size, ciphertext, rounds):
+    """All three key sizes. AES-192 is the one that catches key-schedule mistakes.
+
+    The `i % nk == 4` sub-word step applies only when nk > 6; running it for AES-192
+    produces a plausible-looking schedule that is simply wrong.
+    """
+    round_keys = aes._expand_key(bytes(range(key_size)))
+    assert len(round_keys) - 1 == rounds
+    plaintext = aes.decrypt_block(bytes.fromhex(ciphertext), round_keys)
     assert plaintext.hex() == "00112233445566778899aabbccddeeff"
+
+
+def test_key_expansion_rejects_a_bad_key_length():
+    with pytest.raises(ValueError):
+        aes._expand_key(bytes(20))
+
+
+@pytest.mark.parametrize("key_size", [16, 24, 32])
+@pytest.mark.parametrize("digest", ["md5", "sha1", "sha256"])
+def test_parity_with_openssl_across_every_cipher_and_digest(key_size, digest):
+    """Encrypt with the real openssl, decrypt with this implementation. All nine combos.
+
+    The unsolved blobs never state a cipher -- the README only claims they share the
+    *container* format -- so the sweep has to be able to vary these. Widening the cipher
+    core is the risky part of that, and this is what makes it safe.
+    """
+    plaintext = b"Cosmic Duality parity probe -- pack my box with five dozen liquor jugs.\n"
+    password = "parity-password"
+    encrypted = subprocess.run(
+        ["openssl", "enc", f"-aes-{key_size * 8}-cbc", "-a", "-md", digest,
+         "-pass", f"pass:{password}"],
+        input=plaintext, capture_output=True, check=True,
+    )
+    blob = aes.Blob.parse(base64.b64decode(encrypted.stdout))
+    assert blob.decrypt(password.encode(), digest=digest, key_size=key_size) == plaintext
+
+    wrong = blob.decrypt(b"not-the-password", digest=digest, key_size=key_size)
+    assert wrong != plaintext
+
+
+def test_defaults_still_describe_the_solved_stages():
+    """The default path must not drift: the solved blobs state aes-256-cbc with sha256."""
+    assert aes.DEFAULT_KEY_SIZE == 32
+    assert aes.DEFAULT_DIGEST == "sha256"
+    assert aes.ROUNDS[32] == 14
 
 
 def test_evp_bytes_to_key_matches_openssl():

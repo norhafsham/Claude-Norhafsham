@@ -22,8 +22,15 @@ from dataclasses import dataclass
 
 BLOCK_SIZE = 16
 SALT_MAGIC = b"Salted__"
-_NK = 8  # 256-bit key = 8 words
-_NR = 14  # 14 rounds for AES-256
+
+# Rounds per key size. The puzzle's solved stages all state aes-256-cbc, but the SalPhaseIon
+# and Cosmic Duality blobs state nothing -- the README only says they follow "the same
+# formatting", which is a claim about the base64 container, not the key size. So the sizes
+# are parameters here rather than constants.
+ROUNDS = {16: 10, 24: 12, 32: 14}
+DIGESTS = ("md5", "sha1", "sha256")
+DEFAULT_DIGEST = "sha256"
+DEFAULT_KEY_SIZE = 32
 
 
 def _build_tables() -> tuple[list[int], list[int], list[list[int]]]:
@@ -62,24 +69,33 @@ _RCON = [0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80, 0x1B, 0x36]
 
 
 def _expand_key(key: bytes) -> list[list[int]]:
-    """AES-256 key schedule -> 15 round keys of 16 bytes each."""
-    words = [list(key[i : i + 4]) for i in range(0, 32, 4)]
-    for i in range(_NK, 4 * (_NR + 1)):
+    """AES key schedule for a 128, 192 or 256-bit key -> Nr+1 round keys of 16 bytes.
+
+    The `i % nk == 4` branch only applies when nk > 6, i.e. AES-256 alone. Applying it to
+    AES-192 (nk = 6) would be wrong, and quietly so -- hence the nine-way parity test.
+    """
+    if len(key) not in ROUNDS:
+        raise ValueError(f"key must be 16, 24 or 32 bytes, got {len(key)}")
+    nk = len(key) // 4
+    nr = ROUNDS[len(key)]
+    words = [list(key[i : i + 4]) for i in range(0, len(key), 4)]
+    for i in range(nk, 4 * (nr + 1)):
         t = list(words[i - 1])
-        if i % _NK == 0:
+        if i % nk == 0:
             t = t[1:] + t[:1]  # RotWord
             t = [_SBOX[b] for b in t]
-            t[0] ^= _RCON[i // _NK - 1]
-        elif i % _NK == 4:
+            t[0] ^= _RCON[i // nk - 1]
+        elif nk > 6 and i % nk == 4:
             t = [_SBOX[b] for b in t]
-        words.append([a ^ b for a, b in zip(words[i - _NK], t, strict=True)])
-    return [[b for w in words[4 * r : 4 * r + 4] for b in w] for r in range(_NR + 1)]
+        words.append([a ^ b for a, b in zip(words[i - nk], t, strict=True)])
+    return [[b for w in words[4 * r : 4 * r + 4] for b in w] for r in range(nr + 1)]
 
 
 def decrypt_block(block: bytes, round_keys: list[list[int]]) -> bytes:
     """Inverse cipher on a single 16-byte block."""
-    s = [b ^ k for b, k in zip(block, round_keys[_NR], strict=True)]
-    for rnd in range(_NR - 1, -1, -1):
+    last = len(round_keys) - 1
+    s = [b ^ k for b, k in zip(block, round_keys[last], strict=True)]
+    for rnd in range(last - 1, -1, -1):
         # InvShiftRows: row r rotates right by r; flat index is 4*col + row.
         s = [s[(4 * ((c - r) % 4)) + r] for c in range(4) for r in range(4)]
         s = [_INV_SBOX[b] for b in s]
@@ -99,17 +115,24 @@ def decrypt_block(block: bytes, round_keys: list[list[int]]) -> bytes:
     return bytes(s)
 
 
-def evp_bytes_to_key(password: bytes, salt: bytes) -> tuple[bytes, bytes]:
-    """OpenSSL's EVP_BytesToKey with SHA-256 and count=1 -> (32-byte key, 16-byte IV).
+def evp_bytes_to_key(
+    password: bytes,
+    salt: bytes,
+    digest: str = DEFAULT_DIGEST,
+    key_size: int = DEFAULT_KEY_SIZE,
+) -> tuple[bytes, bytes]:
+    """OpenSSL's EVP_BytesToKey with count=1 -> (key, 16-byte IV).
 
-    SHA-256 is the default digest for `openssl enc` since 1.1.0. The pre-1.1.0 default
-    was MD5; the GSMG blobs are SHA-256, which ANALYSIS.md records as a control result.
+    SHA-256 is the default digest for `openssl enc` since 1.1.0 and MD5 before it. The
+    *solved* GSMG blob is SHA-256, which ANALYSIS.md records as a control result -- but the
+    unsolved blobs never state a digest, so it is a parameter rather than a constant.
     """
     material, prev = b"", b""
-    while len(material) < 48:
-        prev = hashlib.sha256(prev + password + salt).digest()
+    needed = key_size + BLOCK_SIZE
+    while len(material) < needed:
+        prev = hashlib.new(digest, prev + password + salt).digest()
         material += prev
-    return material[:32], material[32:48]
+    return material[:key_size], material[key_size:needed]
 
 
 def strip_padding(plaintext: bytes) -> bytes | None:
@@ -144,21 +167,31 @@ class Blob:
     def blocks(self) -> int:
         return len(self.ciphertext) // BLOCK_SIZE
 
-    def padding_ok(self, password: bytes) -> bool:
+    def padding_ok(
+        self,
+        password: bytes,
+        digest: str = DEFAULT_DIGEST,
+        key_size: int = DEFAULT_KEY_SIZE,
+    ) -> bool:
         """Cheap filter: is the *last* block's padding well formed?
 
         CBC makes the final plaintext block depend only on the last two ciphertext
         blocks, so a candidate costs one block-decrypt regardless of blob size. This is
         the hot path -- a wrong passphrase survives it with probability ~1/256.
         """
-        key, iv = evp_bytes_to_key(password, self.salt)
+        key, iv = evp_bytes_to_key(password, self.salt, digest, key_size)
         prev = self.ciphertext[-2 * BLOCK_SIZE : -BLOCK_SIZE] if self.blocks > 1 else iv
         last = decrypt_block(self.ciphertext[-BLOCK_SIZE:], _expand_key(key))
         return strip_padding(bytes(a ^ b for a, b in zip(last, prev, strict=True))) is not None
 
-    def decrypt(self, password: bytes) -> bytes | None:
+    def decrypt(
+        self,
+        password: bytes,
+        digest: str = DEFAULT_DIGEST,
+        key_size: int = DEFAULT_KEY_SIZE,
+    ) -> bytes | None:
         """Full CBC decrypt. Returns the unpadded plaintext, or None on bad padding."""
-        key, iv = evp_bytes_to_key(password, self.salt)
+        key, iv = evp_bytes_to_key(password, self.salt, digest, key_size)
         round_keys = _expand_key(key)
         out, prev = bytearray(), iv
         for i in range(0, len(self.ciphertext), BLOCK_SIZE):

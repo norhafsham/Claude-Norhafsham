@@ -39,7 +39,7 @@ Three things worth recording about provenance:
 
 ## Three findings that break the naive approach
 
-### 1. The KDF is SHA-256, not MD5
+### 1. The KDF is SHA-256, not MD5 — **on the solved blob**
 
 `openssl enc` used MD5 to derive keys before 1.1.0 and SHA-256 after. A rig that assumes the
 legacy default is silently wrong on every candidate. Settled by decrypting the solved blob
@@ -54,6 +54,14 @@ $ openssl enc -aes-256-cbc -d -a -md sha256 -in data/known_phase32.b64 \
     -pass pass:250f37726d6862939f723edc4f993fde9d33c6004aab4f2203d9ee489d61ce4c
 I've been waiting for you. You have many questions, ...
 ```
+
+**That result covers the solved blob only, and the distinction matters.** The puzzle states
+`aes-256-cbc` with a `sha256` password for phases 2, 3 and 3.2 — all solved. For SalPhaseIon
+and Cosmic Duality it says only that the blob *"follows the same formatting as previous
+openssl base64-encoded AES blobs"*, which is a claim about the base64 container, not about
+key size or digest. Carrying SHA-256 and AES-256 over to the unsolved blobs was an
+inference. See **The parameter sweep**, below, for what happens when it is tested rather
+than assumed.
 
 ### 2. "Did openssl print anything?" matches every passphrase
 
@@ -224,6 +232,51 @@ $ python3 crack.py --blob b --source phrases
 > *A defect that narrowed the previous sweep*, below. It reported 1,152,396 candidates over
 > 88,007 windows; the corrected corpus gives 1,158,696 over 88,417. The result was
 > unchanged (no hits), but the earlier figure was measured on a narrower corpus than stated.
+
+## The parameter sweep
+
+Every sweep before this one decrypted with **AES-256-CBC and a SHA-256 KDF**, because that is
+what the puzzle states — for the phases that are already solved. The unsolved blobs state
+nothing. So the cipher was inherited, never tested, and the consequence is sharper than a
+wrong guess: if blob B is AES-128, or keyed with MD5, then none of the ~2.6M candidates
+previously tested against it could have hit **even if one of them was the right passphrase**.
+The search would have been structurally incapable of succeeding, and would have reported a
+clean negative either way.
+
+That is the same failure family as the blob A reassembly bug and the `king`/`oracle`
+extraction defect: not a wrong answer, but a search that could never have produced one.
+
+`aes.py` now derives rounds from key length (16→10, 24→12, 32→14) and takes the KDF digest as
+a parameter, so `crack.py --all-params` sweeps all nine combinations of
+{AES-128, AES-192, AES-256} × {MD5, SHA-1, SHA-256}. Defaults are unchanged, so every earlier
+control still exercises exactly the path it did before.
+
+### The control for widening a cipher core
+
+Touching the cipher was the risk here, so the parity check widened with it: a known plaintext
+is encrypted by the real `openssl` under each of the nine combinations and must decrypt
+correctly through this implementation. All nine pass, alongside the FIPS-197 vectors for all
+three key sizes.
+
+AES-192 is the case worth naming. Its key schedule applies the extra `SubWord` step only when
+`nk > 6`, so the AES-256 branch must *not* run for it — a mistake there yields a
+plausible-looking schedule that is simply wrong, and only a reference vector catches it.
+
+### Result — in progress
+
+Blob B against the `compose` corpus under all nine combinations is 1,484,268 candidates per
+cell, 13,358,412 in total, and takes about half an hour. **Reported so far:**
+
+| Cipher / digest | Candidates | Padding survivors | Rate | Hits |
+|---|---|---|---|---|
+| AES-128 / MD5 | 1,484,268 | 5,707 | 0.385% | **0** |
+
+The survivor rate is the per-cell sanity check: each combination should land near
+1/256 = 0.391%, confirming it did real work rather than silently degenerating on a key size
+it could not handle. AES-128/MD5 does.
+
+This section is updated as the remaining eight cells report. The capability and its parity
+control are what this commit delivers; the completed table follows with the data.
 
 ## The composition sweep
 

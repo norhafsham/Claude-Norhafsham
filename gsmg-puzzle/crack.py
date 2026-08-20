@@ -10,9 +10,15 @@ Every passphrase is tried in four encodings, because the solved stages used the 
 rather than the phrase: the raw string, its lowercase SHA-256 hex, that hex uppercased,
 and the digest of the digest.
 
+Decryption defaults to AES-256-CBC with a SHA-256 KDF, which is what the puzzle states for
+its *solved* phases. The unsolved blobs state no cipher, so `--all-params` sweeps all nine
+combinations of key size and digest rather than inheriting that assumption.
+
     python3 crack.py --self-test          # controls; run this before trusting a result
     python3 crack.py --blob a             # the 5-block blob embedded in SalPhaseIon
     python3 crack.py --blob b             # the 83-block Cosmic Duality blob
+    python3 crack.py --blob b --all-params            # every cipher x digest
+    python3 crack.py --blob b --key-size 16 --digest md5
 """
 
 from __future__ import annotations
@@ -26,6 +32,7 @@ import time
 from collections.abc import Iterator
 from pathlib import Path
 
+import aes
 import candidates
 import compose
 import phrases
@@ -109,8 +116,18 @@ def is_hit(plaintext: bytes, min_run: int) -> bool:
     return score.confident(span.decode("ascii", "replace"))
 
 
-def search(blob: Blob, source: Iterator[str], min_run: int = 16) -> list[tuple[bytes, bytes]]:
-    """Run the corpus against a blob. Returns [(passphrase, plaintext)] for real hits."""
+def search(
+    blob: Blob,
+    source: Iterator[str],
+    min_run: int = 16,
+    digest: str = aes.DEFAULT_DIGEST,
+    key_size: int = aes.DEFAULT_KEY_SIZE,
+) -> list[tuple[bytes, bytes]]:
+    """Run the corpus against a blob. Returns [(passphrase, plaintext)] for real hits.
+
+    `digest` and `key_size` default to the values the solved stages state. They are
+    parameters because the unsolved blobs never state a cipher -- see ANALYSIS.md.
+    """
     hits: list[tuple[bytes, bytes]] = []
     ranked: list[tuple[int, bytes, bytes]] = []
     tried = survivors = 0
@@ -119,11 +136,11 @@ def search(blob: Blob, source: Iterator[str], min_run: int = 16) -> list[tuple[b
     for candidate in source:
         for password in encodings(candidate):
             tried += 1
-            if not blob.padding_ok(password):
+            if not blob.padding_ok(password, digest, key_size):
                 continue
             # ~1/256 of wrong passphrases reach here by chance; stage two sorts them out.
             survivors += 1
-            plaintext = blob.decrypt(password)
+            plaintext = blob.decrypt(password, digest, key_size)
             if plaintext is None:
                 continue
             run = longest_printable_run(plaintext)
@@ -214,6 +231,12 @@ def main() -> int:
     parser.add_argument("--phrase-control", action="store_true",
                         help="check the phrase pipeline recovers a known key, then exit")
     parser.add_argument("--max-words", type=_positive, help="cap phrase length in words")
+    parser.add_argument("--digest", choices=aes.DIGESTS, default=aes.DEFAULT_DIGEST,
+                        help="KDF digest (the solved stages use sha256)")
+    parser.add_argument("--key-size", type=int, choices=sorted(aes.ROUNDS),
+                        default=aes.DEFAULT_KEY_SIZE, help="AES key bytes: 16, 24 or 32")
+    parser.add_argument("--all-params", action="store_true",
+                        help="sweep every cipher x digest combination, not just the default")
     parser.add_argument("--max-terms", type=int, default=2, help="concatenation depth")
     parser.add_argument("--no-thematic", action="store_true", help="drop SPECULATIVE seeds")
     args = parser.parse_args()
@@ -227,15 +250,31 @@ def main() -> int:
 
     blob = load(args.blob)
     print(f"blob {args.blob}: {blob.blocks} blocks, salt={blob.salt.hex()}")
+
+    def build_source() -> Iterator[str]:
+        """Fresh generator per parameter combination -- an iterator is consumed once."""
+        if args.source == "phrases":
+            return phrases.generate(max_words=args.max_words)
+        if args.source == "compose":
+            return compose.generate()
+        return candidates.generate(max_terms=args.max_terms, thematic=not args.no_thematic)
+
     if args.source == "phrases":
         print(phrases.describe())
-        source = phrases.generate(max_words=args.max_words)
     elif args.source == "compose":
         print(compose.describe())
-        source = compose.generate()
+
+    if args.all_params:
+        combos = [(d, k) for k in sorted(aes.ROUNDS) for d in aes.DIGESTS]
     else:
-        source = candidates.generate(max_terms=args.max_terms, thematic=not args.no_thematic)
-    return 0 if search(blob, source) else 1
+        combos = [(args.digest, args.key_size)]
+
+    hits = []
+    for digest, key_size in combos:
+        if len(combos) > 1:
+            print(f"\n--- aes-{key_size * 8}-cbc / {digest} ---")
+        hits += search(blob, build_source(), digest=digest, key_size=key_size)
+    return 0 if hits else 1
 
 
 if __name__ == "__main__":
